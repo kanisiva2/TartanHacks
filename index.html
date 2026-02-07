@@ -274,7 +274,7 @@
           }
           return true;
         });
-        bonusSeconds = 1 + Math.min(4, Math.floor(fightTaps / 10));
+        bonusSeconds = Math.min(4, Math.floor(fightTaps / 10));
         state = 1;
         joystickWrap.classList.remove('hidden');
         rewardOverlay = true;
