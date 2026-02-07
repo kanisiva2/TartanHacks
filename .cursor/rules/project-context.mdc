@@ -44,7 +44,7 @@ When asked to check the byte size, run these commands and update the current siz
 rm -f app.tar.br && tar -cf - index.html | brotli -q 11 -o app.tar.br && stat -f %z app.tar.br
 ```
 
-**Current compressed size: 2399 bytes**
+**Current compressed size: 2390 bytes**
 
 ## Style Guide
 

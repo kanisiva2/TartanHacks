@@ -140,46 +140,41 @@
     drawScotty(sc.x, sc.y);
   }
 
-  // Joystick — click/tap anywhere to snap joystick, drag to steer
-  const maxDist = 50 - 22;
+  // Joystick — click/tap anywhere, mouse stays on outer edge when outside
+  const baseR = 50; // outer circle radius
+  const knobMax = 28; // max knob travel from center
   const jWrap = document.getElementById('joystickWrap');
-  let jCenter = { x: 0, y: 0 }; // track joystick base center in screen coords
+  let jCenter = { x: 0, y: 0 };
 
-  function snapJoystick(clientX, clientY) {
-    // Get current joystick center, place base so knob lands at click point
-    const r = joystickBase.getBoundingClientRect();
-    const ox = r.left + r.width / 2, oy = r.top + r.height / 2;
-    let dx = clientX - ox, dy = clientY - oy;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    if (d > 1) {
-      jCenter.x = clientX - (dx / d) * maxDist;
-      jCenter.y = clientY - (dy / d) * maxDist;
-    } else {
-      jCenter.x = clientX;
-      jCenter.y = clientY;
-    }
-    jWrap.style.left = jCenter.x + 'px';
-    jWrap.style.top = jCenter.y + 'px';
+  function moveBase(x, y) {
+    jCenter.x = x; jCenter.y = y;
+    jWrap.style.left = x + 'px';
+    jWrap.style.top = y + 'px';
     jWrap.style.transform = 'translate(-50%,-50%)';
     jWrap.style.bottom = 'auto';
   }
+  function snapJoystick(clientX, clientY) {
+    const r = joystickBase.getBoundingClientRect();
+    const ox = r.left + r.width / 2, oy = r.top + r.height / 2;
+    const dx = clientX - ox, dy = clientY - oy;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    // Snap so mouse lands on outer edge (or stays inside if already inside)
+    if (d > baseR) moveBase(clientX - (dx / d) * baseR, clientY - (dy / d) * baseR);
+    else { jCenter.x = ox; jCenter.y = oy; }
+  }
   function updateJoystick(clientX, clientY) {
     let dx = clientX - jCenter.x, dy = clientY - jCenter.y;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    if (d > maxDist) {
-      // Move joystick base to follow, keeping knob at max distance
-      jCenter.x = clientX - (dx / d) * maxDist;
-      jCenter.y = clientY - (dy / d) * maxDist;
-      jWrap.style.left = jCenter.x + 'px';
-      jWrap.style.top = jCenter.y + 'px';
-      dx = clientX - jCenter.x;
-      dy = clientY - jCenter.y;
+    let d = Math.sqrt(dx * dx + dy * dy);
+    if (d > baseR) {
+      moveBase(clientX - (dx / d) * baseR, clientY - (dy / d) * baseR);
+      dx = clientX - jCenter.x; dy = clientY - jCenter.y;
+      d = baseR;
     }
-    const clamp = Math.min(Math.sqrt(dx * dx + dy * dy), maxDist);
+    const t = d / baseR; // 0 at center, 1 at edge
     const angle = Math.atan2(dy, dx);
-    joystickKnob.style.transform = 'translate(' + Math.cos(angle) * clamp + 'px,' + Math.sin(angle) * clamp + 'px)';
-    joystick.x = clamp > 0 ? (Math.cos(angle) * clamp) / maxDist : 0;
-    joystick.y = clamp > 0 ? (Math.sin(angle) * clamp) / maxDist : 0;
+    joystickKnob.style.transform = 'translate(' + Math.cos(angle) * t * knobMax + 'px,' + Math.sin(angle) * t * knobMax + 'px)';
+    joystick.x = t * Math.cos(angle);
+    joystick.y = t * Math.sin(angle);
   }
   function resetJoystick() {
     joystickKnob.style.transform = 'translate(0,0)';
