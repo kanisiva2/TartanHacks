@@ -69,9 +69,14 @@
     const r = SPAWN_RADIUS + (Math.random() - 0.5) * SPAWN_RING;
     return { x: Math.cos(angle) * r, y: Math.sin(angle) * r, vx: 0, vy: 0 };
   }
+  function spawnOffscreen() {
+    const a = Math.random() * Math.PI * 2, dx = Math.cos(a), dy = Math.sin(a);
+    const d = Math.max(W / 2, H / (2 * TILT)) + CHUNK * 2;
+    return { x: cam.x + dx * d, y: cam.y + dy * d, vx: -dx * 4, vy: -dy * 4 };
+  }
   for (let i = 0; i < 8; i++) squirrels.push(spawnSquirrel());
-  let state = 0, timer = 30, tId = 0, score = 0, hiScore = 0;
-  let fightEndTime = 0, fightTaps = 0, fightShake = 0;
+  let state = 0, timer = 30, tId = 0, sId = 0, score = 0, hiScore = 0;
+  let fightEndTime = 0, fightTaps = 0, fightShake = 0, lastCatchTime = 0, scoreMulti = 1;
   const FIGHT_DURATION_MS = 5000;
   const SQUIRREL_CX = 0.5, SQUIRREL_CY = 0.15, SQUIRREL_R = 0.22;
   const SCOTTY_CX = 0.8, SCOTTY_CY = 0.82, SCOTTY_R = 0.04;
@@ -102,6 +107,7 @@
   function stopMus(){clearTimeout(mTm);if(mGn){mGn.gain.cancelScheduledValues(actx.currentTime);mGn.gain.setValueAtTime(mGn.gain.value,actx.currentTime);mGn.gain.linearRampToValueAtTime(.001,actx.currentTime+.3)}}
   function endSfx(){if(!actx)return;var t=actx.currentTime+.4;[[71,.18],[67,.18],[64,.28],[57,.9]].forEach(function(n){var o=actx.createOscillator(),g=actx.createGain();o.type='triangle';o.frequency.value=mtof(n[0]);g.gain.setValueAtTime(.15,t);g.gain.linearRampToValueAtTime(.001,t+n[1]);o.connect(g);g.connect(actx.destination);o.start(t);o.stop(t+n[1]+.01);t+=n[1]})}
   function catchSfx(){if(!actx)return;var t=actx.currentTime;[[72,.06],[76,.06],[79,.06],[84,.12]].forEach(function(n){var o=actx.createOscillator(),g=actx.createGain();o.type='square';o.frequency.value=mtof(n[0]);g.gain.setValueAtTime(.1,t);g.gain.linearRampToValueAtTime(.001,t+n[1]);o.connect(g);g.connect(actx.destination);o.start(t);o.stop(t+n[1]+.01);t+=n[1]*.8})}
+  function dblSfx(){if(!actx)return;var t=actx.currentTime;[[76,.05],[79,.05],[84,.05],[88,.05],[91,.1]].forEach(function(n){var o=actx.createOscillator(),g=actx.createGain();o.type='square';o.frequency.value=mtof(n[0]);g.gain.setValueAtTime(.12,t);g.gain.linearRampToValueAtTime(.001,t+n[1]);o.connect(g);g.connect(actx.destination);o.start(t);o.stop(t+n[1]+.01);t+=n[1]*.7})}
   function tapSfx(){if(!actx)return;var t=actx.currentTime,o=actx.createOscillator(),g=actx.createGain();o.type='square';o.frequency.value=mtof(78+(Math.random()*6|0));g.gain.setValueAtTime(.07,t);g.gain.linearRampToValueAtTime(.001,t+.04);o.connect(g);g.connect(actx.destination);o.start(t);o.stop(t+.05)}
 
   const FONT = [[7,5,5,5,7],[2,6,2,2,2],[7,1,7,4,7],[7,1,7,1,7],[5,5,7,1,1],[7,4,7,1,7],[7,4,7,5,7],[7,1,1,1,1],[7,5,7,5,7],[7,5,7,1,7],[7,4,4,4,7],[7,5,7,6,5],[7,4,7,4,7],[5,5,7,5,5],[7,2,2,2,7],[0,2,0,2,0]];
@@ -241,7 +247,7 @@
         fightTaps = 0;
         fightShake = 0;
         joystickWrap.classList.add('hidden');
-        catchSfx();
+        if(Date.now()-lastCatchTime<1000){scoreMulti=2;dblSfx()}else{scoreMulti=1;catchSfx()}
         if(mGn){mGn.gain.cancelScheduledValues(actx.currentTime);mGn.gain.setValueAtTime(mGn.gain.value,actx.currentTime);mGn.gain.linearRampToValueAtTime(.06,actx.currentTime+.3)}
       } else {
         squirrels = squirrels.filter(sq => { if (sq.caught) { score++; return false; } return true; });
@@ -255,11 +261,12 @@
       if (Date.now() >= fightEndTime) {
         squirrels = squirrels.filter(sq => {
           if (sq.caught) {
-            score += 1 + Math.min(fightTaps, 30);
+            score += (1 + Math.min(fightTaps, 30)) * scoreMulti;
             return false;
           }
           return true;
         });
+        lastCatchTime = Date.now();
         state = 1;
         joystickWrap.classList.remove('hidden');
         if(mGn){mGn.gain.cancelScheduledValues(actx.currentTime);mGn.gain.setValueAtTime(mGn.gain.value,actx.currentTime);mGn.gain.linearRampToValueAtTime(.5,actx.currentTime+.3)}
@@ -545,10 +552,11 @@
     startOv.classList.add('hidden');
     joystickWrap.classList.remove('hidden');
     startMus();
+    sId = setInterval(() => { if (state === 1) squirrels.push(spawnOffscreen()); }, 5000);
     tId = setInterval(() => {
       if (state === 3) return;
       if (--timer <= 0) {
-        timer = 0; state = 2; clearInterval(tId); stopMus(); endSfx();
+        timer = 0; state = 2; clearInterval(tId); clearInterval(sId); stopMus(); endSfx();
         if (score > hiScore) hiScore = score;
         document.getElementById('endScore').textContent = 'SCORE: ' + score;
         draw(); canvas.classList.add('blur'); endOv.style.display = 'flex';
@@ -556,7 +564,7 @@
     }, 1000);
   }
   function resetGame() {
-    stopMus();
+    stopMus(); clearInterval(sId);
     state = 0; timer = 30; score = 0;
     pos.x = pos.y = vel.x = vel.y = cam.x = cam.y = joy.x = joy.y = 0;
     squirrels = [];
