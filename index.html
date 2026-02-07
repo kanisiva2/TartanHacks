@@ -21,9 +21,11 @@
     #joystickBase { width: 120px; height: 120px; border-radius: 50%; background: radial-gradient(circle, rgba(200,220,255,0.02) 0%, rgba(200,220,255,0.04) 40%, rgba(190,215,255,0.15) 70%, rgba(210,230,255,0.3) 88%, rgba(220,235,255,0.38) 100%); border: 2px solid rgba(200,220,255,0.3); touch-action: none; }
     #joystickKnob { width: 54px; height: 54px; border-radius: 50%; background: radial-gradient(circle, rgba(200,220,255,0.03) 0%, rgba(200,220,255,0.06) 35%, rgba(190,215,255,0.18) 65%, rgba(210,230,255,0.33) 85%, rgba(220,235,255,0.42) 100%); border: 2px solid rgba(200,220,255,0.35); position: absolute; left: 33px; top: 33px; transition: transform .05s; }
     .blur { filter: blur(4px); pointer-events: none; }
-    #endOverlay { display: none; position: fixed; inset: 0; z-index: 40; background: rgba(255,255,255,0.35); align-items: center; justify-content: center; flex-direction: column; gap: 40px; }
-    #playAgain { font: bold 6px monospace; transform: scale(4); -webkit-font-smoothing: none; color: #fff; background: rgba(0,0,0,0.6); padding: 3px 6px; border: 1px solid #fff; cursor: pointer; letter-spacing: 1px; }
-    #endScore { font: bold 6px monospace; transform: scale(3); -webkit-font-smoothing: none; color: #e8c547; letter-spacing: 1px; }
+    #endOverlay { display: none; position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,0.4); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); align-items: center; justify-content: center; flex-direction: column; gap: 28px; font-family: 'Press Start 2P', monospace; -webkit-font-smoothing: none; cursor: pointer; }
+    #endOverlay .endTitle { font-size: clamp(18px, 5vw, 32px); color: #e8c547; text-shadow: 3px 3px 0 #5c4a20; }
+    #endScore { font-size: clamp(14px, 4vw, 22px); color: #fff; text-shadow: 2px 2px 0 rgba(0,0,0,0.5); }
+    #playAgain { font-size: clamp(12px, 3.5vw, 20px); color: #fff; background: rgba(232,197,71,0.25); padding: 14px 24px; border: 3px solid #e8c547; border-radius: 4px; cursor: pointer; text-shadow: 2px 2px 0 rgba(0,0,0,0.5); transition: transform 0.1s, background 0.15s; }
+    #playAgain:hover, #playAgain:active { background: rgba(232,197,71,0.4); transform: scale(1.05); }
   </style>
 </head>
 <body>
@@ -38,7 +40,11 @@
         <div id="joystickKnob"></div>
       </div>
     </div>
-    <div id="endOverlay"><div id="playAgain">PLAY AGAIN</div><div id="endScore"></div></div>
+    <div id="endOverlay">
+      <div class="endTitle">TIME'S UP!</div>
+      <div id="endScore"></div>
+      <div id="playAgain">PLAY AGAIN</div>
+    </div>
   </div>
   <script>
 (function () {
