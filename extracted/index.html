@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Game</title>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; touch-action: none; user-select: none; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #1e1a14; }
+    #gameBox { position: fixed; inset: 0; overflow: hidden; }
+    #gameCanvas { display: block; width: 100%; height: 100%; }
+    @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+    #startOverlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 32px; padding: 24px; background: rgba(0,0,0,0.25); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 25; cursor: pointer; font-family: 'Press Start 2P', monospace; -webkit-font-smoothing: none; image-rendering: pixelated; }
+    #startOverlay.hidden { display: none !important; }
+    #startOverlay .gameTitle { font-size: clamp(22px, 7vw, 42px); color: #e8c547; text-shadow: 3px 3px 0 #5c4a20; }
+    #startOverlay .tapToPlay { font-size: clamp(14px, 4.5vw, 24px); color: #fff; text-shadow: 2px 2px 0 rgba(0,0,0,0.4); animation: bounce 1s ease-in-out infinite; }
+    #startOverlay { touch-action: manipulation; }
+    #joystickWrap { position: absolute; bottom: 56px; left: 50%; transform: translateX(-50%); z-index: 30; }
+    #joystickWrap.hidden { display: none !important; }
+    #joystickBase { width: 120px; height: 120px; border-radius: 50%; background: radial-gradient(circle, rgba(200,220,255,0.02) 0%, rgba(200,220,255,0.04) 40%, rgba(190,215,255,0.15) 70%, rgba(210,230,255,0.3) 88%, rgba(220,235,255,0.38) 100%); border: 2px solid rgba(200,220,255,0.3); touch-action: none; }
+    #joystickKnob { width: 54px; height: 54px; border-radius: 50%; background: radial-gradient(circle, rgba(200,220,255,0.03) 0%, rgba(200,220,255,0.06) 35%, rgba(190,215,255,0.18) 65%, rgba(210,230,255,0.33) 85%, rgba(220,235,255,0.42) 100%); border: 2px solid rgba(200,220,255,0.35); position: absolute; left: 33px; top: 33px; transition: transform .05s; }
+    .blur { filter: blur(4px); pointer-events: none; }
+    #endOverlay { display: none; position: fixed; inset: 0; z-index: 40; background: rgba(255,255,255,0.35); align-items: center; justify-content: center; flex-direction: column; gap: 40px; }
+    #playAgain { font: bold 6px monospace; transform: scale(4); -webkit-font-smoothing: none; color: #fff; background: rgba(0,0,0,0.6); padding: 3px 6px; border: 1px solid #fff; cursor: pointer; letter-spacing: 1px; }
+    #endScore { font: bold 6px monospace; transform: scale(3); -webkit-font-smoothing: none; color: #e8c547; letter-spacing: 1px; }
+  </style>
+</head>
+<body>
+  <div id="gameBox">
+    <canvas id="gameCanvas"></canvas>
+    <div id="startOverlay">
+      <div class="gameTitle">SCOTTY</div>
+      <div class="tapToPlay">TAP TO PLAY</div>
+    </div>
+    <div id="joystickWrap" class="hidden">
+      <div id="joystickBase">
+        <div id="joystickKnob"></div>
+      </div>
+    </div>
+    <div id="endOverlay"><div id="playAgain">PLAY AGAIN</div><div id="endScore"></div></div>
+  </div>
+  <script>
+(function () {
+  let W = innerWidth, H = innerHeight;
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  function resize() { W = innerWidth; H = innerHeight; canvas.width = W; canvas.height = H; }
+  addEventListener('resize', function() { resize(); draw(); });
+  resize();
+
+  const jBase = document.getElementById('joystickBase');
+  const jKnob = document.getElementById('joystickKnob');
+
+  let pos = { x: 0, y: 0 };
+  let vel = { x: 0, y: 0 };
+  let cam = { x: 0, y: 0 };
+  let joy = { x: 0, y: 0 };
+  const SCOTTY_SPEED = 7, SQUIRREL_SPEED = 3;
+  const AF = 0.7, AL = 0.25, FR = 0.96, TILT = 0.75;
+  const CHUNK = 80, PIX = 10, PPC = CHUNK / PIX;
+  const SPAWN_RADIUS = 1.8 * CHUNK;
+  const SPAWN_RING = 40;
+  const chunks = {};
+  let squirrels = [];
+  function spawnSquirrel() {
+    const angle = Math.random() * Math.PI * 2;
+    const r = SPAWN_RADIUS + (Math.random() - 0.5) * SPAWN_RING;
+    return { x: Math.cos(angle) * r, y: Math.sin(angle) * r, vx: 0, vy: 0 };
+  }
+  for (let i = 0; i < 8; i++) squirrels.push(spawnSquirrel());
+  let state = 0, timer = 30, tId = 0, score = 0, hiScore = 0;
+  let fightEndTime = 0, fightTaps = 0, fightShake = 0;
+  const FIGHT_DURATION_MS = 5000;
+  const SQUIRREL_CX = 0.5, SQUIRREL_CY = 0.0, SQUIRREL_R = 0.22;
+  const SCOTTY_CX = 0.8, SCOTTY_CY = 0.82, SCOTTY_R = 0.04;
+  const fightIdleData = [{"#2f2f2e":[[10,19],[11,19],[12,19],[13,19],[9,20],[14,20],[8,21],[15,21],[16,21],[17,21],[19,21],[20,21],[8,22],[10,22],[15,22],[16,22],[18,22],[20,22],[8,23],[9,23],[11,23],[15,23],[16,23],[20,23],[11,24],[14,24],[16,24],[21,24],[10,25],[13,25],[16,25],[18,25],[21,25],[10,26],[12,26],[17,26],[21,26],[10,27],[12,27],[17,27],[18,27],[21,27],[11,28],[12,28],[14,28],[15,28],[21,28],[12,29],[16,29],[17,29],[20,29],[13,30],[14,30],[17,30],[19,30],[14,31],[15,31],[16,31],[17,31],[18,31],[19,31]],"#a67354":[[10,20],[11,20],[12,20],[9,21],[10,21],[11,21],[12,21],[9,22],[11,22],[17,22],[17,23],[20,26]],"#825235":[[13,20],[13,21],[12,22],[13,22],[12,23],[13,23],[18,23],[19,23],[12,24],[17,24],[18,24],[19,24],[20,24],[15,25],[17,25],[19,25],[20,25],[14,26],[15,26],[16,26],[18,26],[19,26],[13,27],[14,27],[15,27],[16,27],[13,28],[16,28],[17,28],[14,29],[15,29],[16,30],[18,30]],"#694129":[[14,21],[14,22],[19,22],[14,23],[13,24],[15,24],[11,25],[12,25],[14,25],[11,26],[13,26],[11,27],[20,28],[13,29],[15,30]],"#c2bdbd":[[19,27]],"#e4e4e4":[[20,27]],"#b46828":[[18,28],[19,28]],"#da8238":[[18,29],[19,29]]},{"#2f2f2e":[[10,19],[11,19],[12,19],[13,19],[9,20],[14,20],[8,21],[15,21],[8,22],[10,22],[15,22],[16,22],[17,22],[19,22],[20,22],[8,23],[9,23],[11,23],[15,23],[16,23],[18,23],[20,23],[11,24],[14,24],[16,24],[20,24],[10,25],[13,25],[16,25],[21,25],[10,26],[12,26],[16,26],[18,26],[21,26],[10,27],[12,27],[17,27],[21,27],[11,28],[12,28],[14,28],[15,28],[18,28],[21,28],[12,29],[16,29],[17,29],[20,29],[13,30],[14,30],[17,30],[19,30],[14,31],[15,31],[16,31],[17,31],[18,31],[19,31]],"#a67354":[[10,20],[11,20],[12,20],[9,21],[10,21],[11,21],[12,21],[9,22],[11,22],[17,23],[17,24],[20,27]],"#825235":[[13,20],[13,21],[12,22],[13,22],[12,23],[13,23],[12,24],[18,24],[19,24],[15,25],[17,25],[18,25],[19,25],[20,25],[14,26],[15,26],[17,26],[19,26],[20,26],[13,27],[14,27],[15,27],[16,27],[18,27],[19,27],[13,28],[16,28],[17,28],[14,29],[15,29],[16,30],[18,30]],"#694129":[[14,21],[14,22],[14,23],[19,23],[13,24],[15,24],[11,25],[12,25],[14,25],[11,26],[13,26],[11,27],[13,29],[15,30]],"#c2bdbd":[[19,28]],"#e4e4e4":[[20,28]],"#da8238":[[18,29],[19,29]]}];
+  const fightIdleFrames = cleanFrames(fightIdleData);
+  let sqMove = null, animT = 0;
+  const SQP = 2, SQW = 32, SQH = 32;
+  function cleanFrames(frames) {
+    return frames.filter(fr => {
+      for (const c in fr) if (fr[c] && fr[c].length) return true;
+      return false;
+    });
+  }
+  const sqMoveData = [{"#2f2f2e":[[10,21],[11,21],[12,21],[13,21],[14,21],[16,21],[17,21],[20,21],[21,21],[9,22],[14,22],[16,22],[18,22],[19,22],[21,22],[8,23],[13,23],[15,23],[16,23],[21,23],[8,24],[13,24],[14,24],[16,24],[17,24],[20,24],[21,24],[7,25],[12,25],[13,25],[16,25],[21,25],[7,26],[12,26],[17,26],[18,26],[19,26],[20,26],[7,27],[12,27],[18,27],[20,27],[8,28],[12,28],[14,28],[15,28],[17,28],[19,28],[20,28],[8,29],[12,29],[16,29],[17,29],[18,29],[19,29],[9,30],[10,30],[11,30],[13,30],[14,30],[17,30],[19,30],[14,31],[15,31],[16,31],[17,31],[18,31],[19,31]],"#a67354":[[10,22],[11,22],[12,22],[13,22],[17,22],[20,22],[9,23],[10,23],[11,23],[19,25],[16,28]],"#825235":[[12,23],[17,23],[18,23],[19,23],[20,23],[9,24],[10,24],[11,24],[8,25],[9,25],[10,25],[15,25],[17,25],[18,25],[20,25],[8,26],[9,26],[14,26],[15,26],[16,26],[13,27],[14,27],[15,27],[16,27],[17,27],[13,28],[18,28],[14,29],[15,29],[16,30],[18,30]],"#694129":[[12,24],[15,24],[18,24],[19,24],[11,25],[14,25],[10,26],[11,26],[13,26],[8,27],[9,27],[10,27],[11,27],[19,27],[9,28],[10,28],[11,28],[9,29],[10,29],[11,29],[13,29],[15,30]]},{"#2f2f2e":[[7,20],[8,20],[9,20],[10,20],[11,20],[7,21],[12,21],[16,21],[17,21],[19,21],[20,21],[8,22],[13,22],[16,22],[18,22],[20,22],[8,23],[13,23],[15,23],[16,23],[20,23],[7,24],[14,24],[16,24],[18,24],[21,24],[7,25],[13,25],[16,25],[22,25],[7,26],[12,26],[17,26],[18,26],[19,26],[20,26],[21,26],[22,26],[8,27],[12,27],[18,27],[20,27],[9,28],[12,28],[14,28],[15,28],[17,28],[19,28],[20,28],[10,29],[11,29],[12,29],[16,29],[17,29],[18,29],[19,29],[13,30],[14,30],[17,30],[19,30],[14,31],[15,31],[16,31],[17,31],[18,31],[19,31]],"#a67354":[[8,21],[9,21],[10,21],[11,21],[9,22],[10,22],[11,22],[12,22],[17,22],[9,23],[10,23],[17,23],[21,25],[16,28]],"#694129":[[19,22],[11,24],[12,24],[13,24],[15,24],[10,25],[11,25],[12,25],[14,25],[8,26],[9,26],[10,26],[11,26],[13,26],[9,27],[10,27],[11,27],[19,27],[10,28],[11,28],[13,29],[15,30]],"#825235":[[11,23],[12,23],[18,23],[19,23],[8,24],[9,24],[10,24],[17,24],[19,24],[20,24],[8,25],[9,25],[15,25],[17,25],[18,25],[19,25],[20,25],[14,26],[15,26],[16,26],[13,27],[14,27],[15,27],[16,27],[17,27],[13,28],[18,28],[14,29],[15,29],[16,30],[18,30]]},{},{},{"#2f2f2e":[[5,17],[6,17],[5,18],[7,18],[8,18],[5,19],[9,19],[5,20],[10,20],[5,21],[11,21],[6,22],[12,22],[6,23],[12,23],[18,23],[19,23],[21,23],[22,23],[6,24],[12,24],[13,24],[14,24],[15,24],[18,24],[20,24],[22,24],[6,25],[11,25],[16,25],[17,25],[18,25],[22,25],[7,26],[10,26],[18,26],[20,26],[23,26],[8,27],[9,27],[10,27],[13,27],[18,27],[24,27],[10,28],[14,28],[19,28],[20,28],[21,28],[22,28],[23,28],[24,28],[10,29],[13,29],[14,29],[16,29],[18,29],[20,29],[11,30],[14,30],[15,30],[16,30],[18,30],[20,30],[11,31],[12,31],[13,31],[14,31],[16,31],[17,31],[19,31],[20,31]],"#a67354":[[6,18],[6,19],[7,19],[6,20],[7,20],[6,21],[19,24],[19,25],[23,27],[15,28],[16,28],[15,29]],"#825235":[[8,19],[8,20],[9,20],[7,21],[8,21],[7,22],[8,22],[7,23],[13,25],[14,25],[20,25],[21,25],[12,26],[13,26],[14,26],[15,26],[16,26],[17,26],[19,26],[21,26],[22,26],[11,27],[12,27],[14,27],[15,27],[16,27],[17,27],[19,27],[20,27],[21,27],[22,27],[11,28],[12,28],[13,28],[17,28],[18,28],[12,29],[17,29],[13,30],[17,30]],"#694129":[[9,21],[10,21],[9,22],[10,22],[11,22],[8,23],[9,23],[10,23],[11,23],[7,24],[8,24],[9,24],[10,24],[11,24],[21,24],[7,25],[8,25],[9,25],[10,25],[12,25],[15,25],[8,26],[9,26],[11,26],[11,29],[19,29],[12,30],[19,30]]},{"#2f2f2e":[[4,17],[5,17],[6,17],[7,17],[4,18],[8,18],[9,18],[5,19],[10,19],[18,19],[19,19],[21,19],[22,19],[5,20],[11,20],[18,20],[20,20],[22,20],[5,21],[12,21],[15,21],[16,21],[17,21],[18,21],[22,21],[6,22],[12,22],[13,22],[14,22],[18,22],[20,22],[23,22],[6,23],[11,23],[18,23],[24,23],[7,24],[10,24],[19,24],[20,24],[21,24],[22,24],[23,24],[24,24],[8,25],[9,25],[10,25],[18,25],[19,25],[21,25],[10,26],[13,26],[16,26],[17,26],[19,26],[20,26],[22,26],[10,27],[13,27],[14,27],[15,27],[18,27],[20,27],[21,27],[22,27],[9,28],[12,28],[13,28],[19,28],[20,28],[9,29],[10,29],[11,29]],"#a67354":[[5,18],[6,18],[7,18],[6,19],[7,19],[6,20],[19,20],[19,21],[23,23],[16,25],[17,25],[14,26],[15,26]],"#825235":[[8,19],[9,19],[7,20],[8,20],[6,21],[7,21],[8,21],[20,21],[21,21],[15,22],[16,22],[19,22],[21,22],[22,22],[13,23],[14,23],[15,23],[16,23],[17,23],[19,23],[20,23],[21,23],[22,23],[12,24],[13,24],[14,24],[15,24],[16,24],[17,24],[18,24],[11,25],[12,25],[13,25],[14,25],[15,25],[11,26],[12,26],[18,26],[12,27],[19,27],[11,28]],"#694129":[[9,20],[10,20],[21,20],[9,21],[10,21],[11,21],[7,22],[8,22],[9,22],[10,22],[11,22],[17,22],[7,23],[8,23],[9,23],[10,23],[12,23],[8,24],[9,24],[11,24],[20,25],[21,26],[11,27],[10,28]]},{"#2f2f2e":[[4,13],[5,13],[6,13],[7,13],[4,14],[8,14],[9,14],[5,15],[10,15],[5,16],[11,16],[5,17],[12,17],[6,18],[12,18],[18,18],[19,18],[21,18],[22,18],[6,19],[12,19],[13,19],[14,19],[18,19],[20,19],[22,19],[6,20],[11,20],[15,20],[16,20],[17,20],[18,20],[22,20],[7,21],[10,21],[18,21],[20,21],[23,21],[8,22],[9,22],[10,22],[18,22],[24,22],[10,23],[13,23],[19,23],[20,23],[21,23],[22,23],[23,23],[24,23],[10,24],[13,24],[18,24],[19,24],[21,24],[9,25],[12,25],[13,25],[14,25],[15,25],[16,25],[17,25],[19,25],[20,25],[22,25],[9,26],[10,26],[11,26],[18,26],[20,26],[21,26],[22,26],[19,27],[20,27]],"#a67354":[[5,14],[6,14],[7,14],[6,15],[7,15],[6,16],[7,16],[6,17],[19,19],[19,20],[23,22],[14,24],[15,24],[16,24],[17,24]],"#825235":[[8,15],[9,15],[8,16],[9,16],[10,16],[7,17],[8,17],[7,18],[8,18],[13,20],[14,20],[20,20],[21,20],[12,21],[13,21],[14,21],[15,21],[16,21],[19,21],[21,21],[22,21],[11,22],[12,22],[13,22],[14,22],[15,22],[16,22],[17,22],[19,22],[20,22],[21,22],[22,22],[11,23],[12,23],[14,23],[15,23],[16,23],[17,23],[18,23],[12,24],[11,25],[18,25],[19,26]],"#694129":[[9,17],[10,17],[11,17],[9,18],[10,18],[11,18],[7,19],[8,19],[9,19],[10,19],[11,19],[21,19],[7,20],[8,20],[9,20],[10,20],[12,20],[8,21],[9,21],[11,21],[17,21],[11,24],[20,24],[10,25],[21,25]]},{"#2f2f2e":[[5,14],[6,14],[7,14],[8,14],[5,15],[9,15],[6,16],[10,16],[6,17],[11,17],[6,18],[12,18],[6,19],[12,19],[7,20],[13,20],[7,21],[12,21],[13,21],[14,21],[18,21],[19,21],[21,21],[22,21],[7,22],[11,22],[15,22],[18,22],[20,22],[22,22],[8,23],[10,23],[16,23],[17,23],[18,23],[22,23],[9,24],[10,24],[18,24],[20,24],[23,24],[10,25],[13,25],[18,25],[24,25],[10,26],[13,26],[19,26],[20,26],[21,26],[22,26],[23,26],[24,26],[9,27],[12,27],[13,27],[14,27],[15,27],[18,27],[19,27],[21,27],[9,28],[10,28],[11,28],[16,28],[17,28],[19,28],[20,28],[22,28],[18,29],[20,29],[21,29],[22,29],[19,30],[20,30]],"#a67354":[[6,15],[7,15],[8,15],[7,16],[8,16],[7,17],[8,17],[7,18],[19,22],[19,23],[23,25],[14,26],[15,26],[16,27],[17,27]],"#825235":[[9,16],[9,17],[10,17],[8,18],[9,18],[10,18],[7,19],[8,19],[9,19],[8,20],[13,22],[14,22],[12,23],[13,23],[14,23],[15,23],[20,23],[21,23],[11,24],[12,24],[13,24],[14,24],[15,24],[16,24],[19,24],[21,24],[22,24],[11,25],[12,25],[14,25],[15,25],[16,25],[17,25],[19,25],[20,25],[21,25],[22,25],[12,26],[16,26],[17,26],[18,26],[11,27],[18,28],[19,29]],"#694129":[[11,18],[10,19],[11,19],[9,20],[10,20],[11,20],[12,20],[8,21],[9,21],[10,21],[11,21],[8,22],[9,22],[10,22],[12,22],[21,22],[9,23],[11,23],[17,24],[11,26],[10,27],[20,27],[21,28]]}];
+  sqMove = cleanFrames(sqMoveData);
+
+  // Procedural chiptune music (Web Audio API)
+  let actx, mGn, mTm;
+  function mtof(m){return 440*Math.pow(2,(m-69)/12)}
+  function tone(f,t,d,tp,v){var o=actx.createOscillator(),g=actx.createGain();o.type=tp;o.frequency.value=f;g.gain.setValueAtTime(v,t);g.gain.linearRampToValueAtTime(.001,t+d);o.connect(g);g.connect(mGn);o.start(t);o.stop(t+d+.01)}
+  function hat(t){var b=actx.createBuffer(1,2200,actx.sampleRate),d=b.getChannelData(0);for(var i=0;i<2200;i++)d[i]=Math.random()*2-1;var s=actx.createBufferSource(),g=actx.createGain(),f=actx.createBiquadFilter();s.buffer=b;f.type='highpass';f.frequency.value=7000;g.gain.setValueAtTime(.04,t);g.gain.linearRampToValueAtTime(.001,t+.05);s.connect(f);f.connect(g);g.connect(mGn);s.start(t);s.stop(t+.06)}
+  var ST=60/190/2;
+  var ML=[69,72,76,81,76,72,69,72,76,79,83,79,76,72,76,79,74,77,81,77,74,76,79,83,81,79,76,72,74,76,79,72];
+  var BL=[45,57,45,57,45,57,45,57,40,52,40,52,40,52,40,52,38,50,38,50,40,52,40,52,36,48,36,48,45,57,45,57];
+  var mNext=0;
+  function mSched(){var t0=mNext||(actx.currentTime+.1),len=ML.length*ST;mNext=t0+len;for(var i=0;i<ML.length;i++){var t=t0+i*ST;if(ML[i])tone(mtof(ML[i]),t,ST*.55,'square',.09);if(BL[i])tone(mtof(BL[i]),t,ST*1.1,'triangle',.17);hat(t)}mTm=setTimeout(mSched,(mNext-actx.currentTime-.3)*1e3)}
+  function startMus(){if(!actx){actx=new(AudioContext||webkitAudioContext)();mGn=actx.createGain();mGn.connect(actx.destination)}mGn.gain.cancelScheduledValues(actx.currentTime);mGn.gain.setValueAtTime(.5,actx.currentTime);if(actx.state==='suspended')actx.resume();mNext=0;mSched()}
+  function stopMus(){clearTimeout(mTm);if(mGn){mGn.gain.cancelScheduledValues(actx.currentTime);mGn.gain.setValueAtTime(mGn.gain.value,actx.currentTime);mGn.gain.linearRampToValueAtTime(.001,actx.currentTime+.3)}}
+  function endSfx(){if(!actx)return;var t=actx.currentTime+.4;[[71,.18],[67,.18],[64,.28],[57,.9]].forEach(function(n){var o=actx.createOscillator(),g=actx.createGain();o.type='triangle';o.frequency.value=mtof(n[0]);g.gain.setValueAtTime(.15,t);g.gain.linearRampToValueAtTime(.001,t+n[1]);o.connect(g);g.connect(actx.destination);o.start(t);o.stop(t+n[1]+.01);t+=n[1]})}
+
+  const FONT = [[7,5,5,5,7],[2,6,2,2,2],[7,1,7,4,7],[7,1,7,1,7],[5,5,7,1,1],[7,4,7,1,7],[7,4,7,5,7],[7,1,1,1,1],[7,5,7,5,7],[7,5,7,1,7],[7,4,4,4,7],[7,5,7,6,5],[7,4,7,4,7],[5,5,7,5,5],[7,2,2,2,7],[0,2,0,2,0]];
+  function drawPx(chars, x, y, sz) {
+    chars.forEach((d, di) => {
+      if (d < 0) return;
+      const ox = x + di * sz * 4;
+      FONT[d].forEach((row, r) => { for (let c = 0; c < 3; c++) if (row & (4 >> c)) {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(ox + c * sz - 1, y + r * sz - 1, sz + 2, sz + 2);
+      }});
+      FONT[d].forEach((row, r) => { for (let c = 0; c < 3; c++) if (row & (4 >> c)) {
+        ctx.fillStyle = '#e8c547';
+        ctx.fillRect(ox + c * sz, y + r * sz, sz, sz);
+      }});
+    });
+  }
+
+  function nearbyDecos(cx, cy) {
+    let count = 0;
+    const R = 4;
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      if (dx * dx + dy * dy > R * R || (!dx && !dy)) continue;
+      const ch = chunks[cx + dx + ',' + (cy + dy)];
+      if (ch && (ch.grass || ch.bush || ch.tree || ch.peb)) count++;
+    }
+    return count;
+  }
+
+  function nz(x,y){function h(a,b){var n=Math.sin(a*127.1+b*311.7)*43758.5;return n-Math.floor(n)}var ix=Math.floor(x),iy=Math.floor(y),fx=x-ix,fy=y-iy;fx=fx*fx*(3-2*fx);fy=fy*fy*(3-2*fy);var a=h(ix,iy),b=h(ix+1,iy),c=h(ix,iy+1),d=h(ix+1,iy+1);return a+(b-a)*fx+(c-a)*fy+(a-b-c+d)*fx*fy}
+  function terrain(cx,cy){if(cx>-3&&cx<3&&cy>-3&&cy<3)return 0;var n=nz(cx*.12,cy*.12);if(n>.78)return 2;var n2=nz(cx*.08+100,cy*.08+100);if(Math.abs(n2-.5)<.05)return 1;return 0}
+
+  function getChunk(cx, cy) {
+    const k = cx + ',' + cy;
+    if (!(k in chunks)) {
+      const tt = terrain(cx, cy);
+      const c = document.createElement('canvas');
+      c.width = c.height = CHUNK;
+      const g = c.getContext('2d');
+      var tl=terrain(cx-1,cy),tr=terrain(cx+1,cy),tu=terrain(cx,cy-1),td=terrain(cx,cy+1);
+      for (let y = 0; y < PPC; y++) for (let x = 0; x < PPC; x++) {
+        const v = Math.random() * 10 - 5 | 0;
+        let pt=tt;
+        var bc=[0,0,0];if(tl!==tt&&x<2)bc[tl]+=(2-x)/2;if(tr!==tt&&x>PPC-3)bc[tr]+=(x-PPC+3)/2;if(tu!==tt&&y<2)bc[tu]+=(2-y)/2;if(td!==tt&&y>PPC-3)bc[td]+=(y-PPC+3)/2;var bm=0,bi=tt;for(var i=0;i<3;i++)if(bc[i]>bm){bm=bc[i];bi=i}if(bm>0&&Math.random()<bm*.3)pt=bi
+        if(pt===1){var dr=Math.random();if(dr<.02)g.fillStyle='rgb('+(130+v)+','+(100+v)+','+(55+v)+')';else if(dr<.04)g.fillStyle='rgb('+(135+v)+','+(130+v)+','+(120+v)+')';else g.fillStyle='rgb('+(155+v)+','+(125+v)+','+(75+v)+')';}
+        else if(pt===2){const w=Math.random()*16-8|0;var wr=Math.random();if(wr<.1)g.fillStyle='rgb('+(45+w)+','+(105+w)+','+(205+w)+')';else g.fillStyle='rgb('+(30+w)+','+(85+w)+','+(185+w)+')';}
+        else{if(Math.random()<.03)g.fillStyle='rgb('+(32+v)+','+(155+v)+','+(32+v)+')';else g.fillStyle='rgb('+(40+v)+','+(170+v)+','+(40+v)+')';}
+        g.fillRect(x * PIX, y * PIX, PIX, PIX);
+      }
+      let grass = null, bush = null, tree = null, peb = null;
+      const spawn = cx > -3 && cx < 3 && cy > -3 && cy < 3;
+      if (tt===0 && !spawn && Math.random() < 0.06) {
+        const pv = [];
+        for (let i = 0; i < 30; i++) pv.push(Math.random() * 30 - 15 | 0);
+        peb = [Math.random() * (CHUNK - 30) | 0, Math.random() * (CHUNK - 10) | 0, pv];
+      }
+      if (tt===0 && !spawn) {
+        const nearby = nearbyDecos(cx, cy);
+        const prob = Math.max(0.02, 0.15 - nearby * 0.04);
+        const r = Math.random();
+        if (r < prob * 0.45) {
+          grass = [Math.random() * (CHUNK - 30) | 0, Math.random() * (CHUNK - 10) | 0];
+        } else if (r < prob * 0.75) {
+          const bv = [];
+          for (let i = 0; i < 90; i++) bv.push(Math.random() * 40 - 20 | 0);
+          bush = [CHUNK / 2 - 27 | 0, CHUNK / 2, bv];
+        } else if (r < prob) {
+          const lv = [], tv = [];
+          for (let i = 0; i < 100; i++) lv.push(Math.random() * 40 - 20 | 0);
+          for (let i = 0; i < 20; i++) tv.push(Math.random() * 30 - 15 | 0);
+          tree = [CHUNK / 2 - 20 | 0, CHUNK / 2, lv, tv];
+        }
+      }
+      chunks[k] = { c, grass, bush, tree, peb, tt };
+    }
+    return chunks[k];
+  }
+
+  function toScreen(wx, wy) {
+    return { x: (wx - cam.x) + W / 2, y: (wy - cam.y) * TILT + H / 2 };
+  }
+
+  function hitTree(x, y) {
+    const r = 14;
+    for (let cy = Math.floor((y - r) / CHUNK); cy <= Math.floor((y + r) / CHUNK); cy++)
+      for (let cx = Math.floor((x - r) / CHUNK); cx <= Math.floor((x + r) / CHUNK); cx++) {
+        const ch = getChunk(cx, cy);
+        if (ch.tree || ch.tt === 2) return true;
+      }
+    return false;
+  }
+
+  function tick() {
+    if (state === 1) {
+      const spd = Math.sqrt(vel.x * vel.x + vel.y * vel.y);
+      let ax = joy.x, ay = joy.y;
+      if (spd > 0.3) {
+        const nx = vel.x / spd, ny = vel.y / spd;
+        const fwd = ax * nx + ay * ny;
+        const lx = ax - fwd * nx, ly = ay - fwd * ny;
+        ax = fwd * nx * AF + lx * AL;
+        ay = fwd * ny * AF + ly * AL;
+      } else { ax *= AF; ay *= AF; }
+      vel.x = vel.x * FR + ax;
+      vel.y = vel.y * FR + ay;
+      const s2 = Math.sqrt(vel.x * vel.x + vel.y * vel.y);
+      if (s2 > SCOTTY_SPEED) { vel.x = vel.x / s2 * SCOTTY_SPEED; vel.y = vel.y / s2 * SCOTTY_SPEED; }
+      let nx = pos.x + vel.x, ny = pos.y + vel.y;
+      if (hitTree(nx, pos.y)) { nx = pos.x; vel.x = 0; }
+      if (hitTree(nx, ny)) { ny = pos.y; vel.y = 0; }
+      pos.x = nx; pos.y = ny;
+      squirrels.forEach(sq => {
+        const dx = pos.x - sq.x, dy = pos.y - sq.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const cd = dist / CHUNK;
+        let tx = (Math.random() - 0.5) * 0.6, ty = (Math.random() - 0.5) * 0.6;
+        if (dist > 1) {
+          const ux = dx / dist, uy = dy / dist;
+          if (cd < 2.5) { tx -= ux * 1.2; ty -= uy * 1.2; }
+          else if (cd > 4) { tx += ux * 0.6; ty += uy * 0.6; }
+        }
+        const tl = Math.sqrt(tx * tx + ty * ty);
+        if (tl > 0) { sq.vx += tx / tl * 0.4; sq.vy += ty / tl * 0.4; }
+        sq.vx *= 0.95; sq.vy *= 0.95;
+        const ss = Math.sqrt(sq.vx * sq.vx + sq.vy * sq.vy);
+        if (ss > SQUIRREL_SPEED) { sq.vx = sq.vx / ss * SQUIRREL_SPEED; sq.vy = sq.vy / ss * SQUIRREL_SPEED; }
+        let snx = sq.x + sq.vx, sny = sq.y + sq.vy;
+        if (hitTree(snx, sq.y)) { snx = sq.x; sq.vx *= -0.5; }
+        if (hitTree(snx, sny)) { sny = sq.y; sq.vy *= -0.5; }
+        sq.x = snx; sq.y = sny;
+        if (dist < 28) sq.caught = true;
+      });
+      const anyCaught = squirrels.some(sq => sq.caught);
+      if (anyCaught) {
+        state = 3;
+        fightEndTime = Date.now() + FIGHT_DURATION_MS;
+        fightTaps = 0;
+        fightShake = 0;
+        joystickWrap.classList.add('hidden');
+      } else {
+        squirrels = squirrels.filter(sq => { if (sq.caught) { score++; return false; } return true; });
+      }
+      cam.x += (pos.x - cam.x) * 0.1;
+      cam.y += (pos.y - cam.y) * 0.1;
+    }
+    if (state === 3) {
+      fightShake *= 0.82;
+      if (fightShake < 0.5) fightShake = 0;
+      if (Date.now() >= fightEndTime) {
+        squirrels = squirrels.filter(sq => {
+          if (sq.caught) {
+            score += 1 + Math.min(fightTaps, 30);
+            return false;
+          }
+          return true;
+        });
+        state = 1;
+        joystickWrap.classList.remove('hidden');
+      }
+    }
+    animT++;
+    if (state < 2 || state === 3) draw();
+  }
+
+  function draw() {
+    ctx.imageSmoothingEnabled = false;
+    if (state === 3) {
+      const shakeX = fightShake ? (Math.random() - 0.5) * 2 * fightShake : 0;
+      const shakeY = fightShake ? (Math.random() - 0.5) * 2 * fightShake : 0;
+      ctx.save();
+      if (fightShake) ctx.translate(shakeX, shakeY);
+      ctx.fillStyle = '#2a3520';
+      ctx.fillRect(0, 0, W, H);
+      const sqX = W * SQUIRREL_CX, sqY = H * SQUIRREL_CY, sqR = Math.min(W, H) * SQUIRREL_R;
+      if (fightIdleFrames && fightIdleFrames.length) {
+        const fi = (animT / 8 | 0) % fightIdleFrames.length;
+        const size = Math.min(W, H) * 1.45;
+        const fightSQP = size / 32;
+        const ox = sqX - size / 2;
+        const oy = sqY - size / 2;
+        const fr = fightIdleFrames[fi];
+        for (const c in fr) {
+          ctx.fillStyle = c;
+          const pts = fr[c];
+          for (let i = 0; i < pts.length; i++) {
+            const p = pts[i];
+            const px = Math.floor(ox + p[0] * fightSQP);
+            const py = Math.floor(oy + p[1] * fightSQP);
+            const cell = Math.ceil(fightSQP) + 1;
+            ctx.fillRect(px, py, cell, cell);
+          }
+        }
+      } else {
+        ctx.fillStyle = '#5a4a3a';
+        ctx.beginPath(); ctx.ellipse(sqX, sqY + sqR * 0.3, sqR * 1.1, sqR * 0.9, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#4a3a2a';
+        ctx.beginPath(); ctx.arc(sqX, sqY - sqR * 0.5, sqR * 0.6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#000';
+        ctx.beginPath(); ctx.arc(sqX - sqR * 0.25, sqY - sqR * 0.6, sqR * 0.12, 0, Math.PI * 2); ctx.arc(sqX + sqR * 0.25, sqY - sqR * 0.6, sqR * 0.12, 0, Math.PI * 2); ctx.fill();
+      }
+      const secLeft = Math.ceil((fightEndTime - Date.now()) / 1000);
+      const bounceY = Math.abs(Math.sin(animT * 0.12)) * 12;
+      ctx.fillStyle = '#e8c547';
+      ctx.font = '26px "Press Start 2P"';
+      ctx.textAlign = 'center';
+      ctx.fillText('TAP!', W / 2, H * 0.72 + bounceY);
+      ctx.fillStyle = 'rgba(232,197,71,0.9)';
+      ctx.textAlign = 'left';
+      const rowCenter = W / 2;
+      const leftX = rowCenter - 110;
+      const rightX = rowCenter + 50;
+      ctx.font = '28px "Press Start 2P"';
+      ctx.fillText(String(fightTaps), leftX, H * 0.84);
+      ctx.font = '11px "Press Start 2P"';
+      ctx.fillText('taps', leftX + 52, H * 0.84);
+      ctx.font = '28px "Press Start 2P"';
+      ctx.fillText(String(secLeft), rightX, H * 0.84);
+      ctx.font = '11px "Press Start 2P"';
+      ctx.fillText('s left', rightX + 44, H * 0.84);
+      ctx.textAlign = 'left';
+      ctx.restore();
+      return;
+    }
+    const cx0 = Math.floor((cam.x - W / 2) / CHUNK) - 1;
+    const cx1 = Math.ceil((cam.x + W / 2) / CHUNK) + 1;
+    const cy0 = Math.floor((cam.y - H / (2 * TILT)) / CHUNK) - 1;
+    const cy1 = Math.ceil((cam.y + H / (2 * TILT)) / CHUNK) + 1;
+    const chunkH = CHUNK * TILT;
+
+    for (let cy = cy0; cy <= cy1; cy++)
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const s = toScreen(cx * CHUNK, cy * CHUNK);
+        ctx.drawImage(getChunk(cx, cy).c, s.x, s.y, CHUNK, chunkH);
+      }
+
+    const P = 3;
+    const gFill = [
+      [1,0],[0,1],[0,2],[-1,3],[-1,4],[-2,5],
+      [3,0],[3,1],[3,2],[3,3],[3,4],[3,5],
+      [5,0],[6,1],[6,2],[7,3],[7,4],[8,5],
+    ];
+    const gOut = [
+      [0,0],[-1,1],[-1,2],[-2,3],[-2,4],[-3,5],[-3,6],[-2,6],[-1,5],[0,4],[0,3],[1,2],[1,1],
+      [2,0],[2,1],[2,2],[2,3],[2,4],[2,5],[2,6],[3,6],[4,5],[4,4],[4,3],[4,2],[4,1],[4,0],
+      [6,0],[7,1],[7,2],[8,3],[8,4],[9,5],[9,6],[8,6],[7,5],[6,4],[6,3],[5,2],[5,1],
+      [0,-1],[1,-1],[2,-1],[3,-1],[4,-1],[5,-1],[6,-1],
+    ];
+    const bFill = [
+      [9,8],[10,8],[11,8],[12,8],[13,8],
+      [8,9],[9,9],[10,9],[11,9],[12,9],[13,9],[14,9],
+      [7,10],[8,10],[9,10],[10,10],[11,10],[12,10],[13,10],[14,10],[15,10],
+      [7,11],[8,11],[9,11],[10,11],[11,11],[12,11],[13,11],[14,11],[15,11],
+      [3,0],[4,0],[5,0],[6,0],[7,0],[8,0],[9,0],[10,0],
+      [2,1],[3,1],[4,1],[5,1],[6,1],[7,1],[8,1],[9,1],[10,1],[11,1],
+      [1,2],[2,2],[3,2],[4,2],[5,2],[6,2],[7,2],[8,2],[9,2],[10,2],[11,2],[12,2],
+      [0,3],[1,3],[2,3],[3,3],[4,3],[5,3],[6,3],[7,3],[8,3],[9,3],[10,3],[11,3],[12,3],
+      [0,4],[1,4],[2,4],[3,4],[4,4],[5,4],[6,4],[7,4],[8,4],[9,4],[10,4],[11,4],[12,4],
+      [0,5],[1,5],[2,5],[3,5],[4,5],[5,5],[6,5],[7,5],[8,5],[9,5],[10,5],[11,5],[12,5],
+      [1,6],[2,6],[3,6],[4,6],[5,6],[6,6],[7,6],[8,6],[9,6],[10,6],[11,6],
+      [2,7],[3,7],[4,7],[5,7],[6,7],[7,7],[8,7],[9,7],[10,7],
+      [14,1],[15,1],[16,1],[17,1],[18,1],[19,1],
+      [13,2],[14,2],[15,2],[16,2],[17,2],[18,2],[19,2],[20,2],
+      [13,3],[14,3],[15,3],[16,3],[17,3],[18,3],[19,3],[20,3],[21,3],
+      [13,4],[14,4],[15,4],[16,4],[17,4],[18,4],[19,4],[20,4],[21,4],
+      [13,5],[14,5],[15,5],[16,5],[17,5],[18,5],[19,5],[20,5],[21,5],
+      [13,6],[14,6],[15,6],[16,6],[17,6],[18,6],[19,6],[20,6],[21,6],
+      [12,7],[13,7],[14,7],[15,7],[16,7],[17,7],[18,7],[19,7],[20,7],
+      [13,8],[14,8],[15,8],[16,8],[17,8],[18,8],[19,8],
+    ];
+    const bOut = [
+      [8,8],[14,8],[7,9],[15,9],
+      [6,10],[16,10],[6,11],[16,11],
+      [7,12],[8,12],[9,12],[10,12],[11,12],[12,12],[13,12],[14,12],[15,12],
+      [3,-1],[4,-1],[5,-1],[6,-1],[7,-1],[8,-1],[9,-1],[10,-1],
+      [2,0],[11,0],[1,1],[12,1],[13,1],[15,0],[16,0],[17,0],[18,0],[19,0],[20,1],
+      [0,2],[21,2],[-1,3],[22,3],[-1,4],[22,4],[-1,5],[22,5],
+      [0,6],[22,6],[1,7],[21,7],
+      [2,8],[20,8],
+      [3,9],[4,9],[5,9],[6,9],[7,9],
+      [15,9],[16,9],[17,9],[18,9],[19,9],
+    ];
+    const tTrk = [
+      [5,0],[6,0],[7,0],[8,0],
+      [5,1],[6,1],[7,1],[8,1],
+      [6,2],[7,2],[6,3],[7,3],[6,4],[7,4],[6,5],[7,5],[6,6],[7,6],[6,7],[7,7],
+    ];
+    const tLf = [
+      [5,8],[6,8],[7,8],[8,8],
+      [3,9],[4,9],[5,9],[6,9],[7,9],[8,9],[9,9],[10,9],
+      [2,10],[3,10],[4,10],[5,10],[6,10],[7,10],[8,10],[9,10],[10,10],[11,10],
+      [1,11],[2,11],[3,11],[4,11],[5,11],[6,11],[7,11],[8,11],[9,11],[10,11],[11,11],[12,11],
+      [1,12],[2,12],[3,12],[4,12],[5,12],[6,12],[7,12],[8,12],[9,12],[10,12],[11,12],[12,12],
+      [1,13],[2,13],[3,13],[4,13],[5,13],[6,13],[7,13],[8,13],[9,13],[10,13],[11,13],[12,13],
+      [1,14],[2,14],[3,14],[4,14],[5,14],[6,14],[7,14],[8,14],[9,14],[10,14],[11,14],[12,14],
+      [2,15],[3,15],[4,15],[5,15],[6,15],[7,15],[8,15],[9,15],[10,15],[11,15],
+      [3,16],[4,16],[5,16],[6,16],[7,16],[8,16],[9,16],[10,16],
+      [5,17],[6,17],[7,17],[8,17],
+    ];
+    const tOut = [
+      [5,-1],[6,-1],[7,-1],[8,-1],
+      [4,0],[9,0],[4,1],[9,1],
+      [5,2],[8,2],[5,3],[8,3],[5,4],[8,4],[5,5],[8,5],[5,6],[8,6],[5,7],[8,7],
+      [4,8],[9,8],
+      [2,9],[11,9],
+      [1,10],[12,10],
+      [0,11],[13,11],[0,12],[13,12],[0,13],[13,13],[0,14],[13,14],
+      [1,15],[12,15],
+      [2,16],[11,16],
+      [4,17],[9,17],
+      [5,18],[6,18],[7,18],[8,18],
+    ];
+    const pFl = [
+      [2,0],[3,0],[4,0],[5,0],
+      [1,1],[2,1],[3,1],[4,1],[5,1],[6,1],
+      [0,2],[1,2],[2,2],[3,2],[4,2],[5,2],[6,2],[7,2],
+      [1,3],[2,3],[3,3],[4,3],[5,3],[6,3],
+      [2,4],[3,4],[4,4],
+    ];
+    const pOt = [
+      [2,-1],[3,-1],[4,-1],[5,-1],
+      [1,0],[6,0],
+      [0,1],[7,1],
+      [-1,2],[8,2],
+      [0,3],[7,3],
+      [1,4],[5,4],
+      [2,5],[3,5],[4,5],
+    ];
+    function drawDeco(wx, wy, fill, out, vr) {
+      const s = toScreen(wx, wy);
+      ctx.fillStyle = 'rgb(15,85,12)';
+      out.forEach(([dx, dy]) => ctx.fillRect(s.x + dx * P, s.y - dy * P, P, P));
+      if (vr) {
+        fill.forEach(([dx, dy], i) => {
+          const v = vr[i % vr.length];
+          ctx.fillStyle = 'rgb(' + (25 + v) + ',' + (140 + v) + ',' + (25 + v) + ')';
+          ctx.fillRect(s.x + dx * P, s.y - dy * P, P, P);
+        });
+      } else {
+        ctx.fillStyle = 'rgb(35,170,35)';
+        fill.forEach(([dx, dy]) => ctx.fillRect(s.x + dx * P, s.y - dy * P, P, P));
+      }
+    }
+    function drawTree(wx, wy, lv, tv) {
+      const s = toScreen(wx, wy);
+      ctx.fillStyle = 'rgb(20,50,15)';
+      tOut.forEach(([dx, dy]) => ctx.fillRect(s.x + dx * P, s.y - dy * P, P, P));
+      tTrk.forEach(([dx, dy], i) => {
+        const v = tv[i % tv.length];
+        ctx.fillStyle = 'rgb(' + (110 + v) + ',' + (70 + v) + ',' + (35 + v) + ')';
+        ctx.fillRect(s.x + dx * P, s.y - dy * P, P, P);
+      });
+      tLf.forEach(([dx, dy], i) => {
+        const v = lv[i % lv.length];
+        ctx.fillStyle = 'rgb(' + (30 + v) + ',' + (130 + v) + ',' + (30 + v) + ')';
+        ctx.fillRect(s.x + dx * P, s.y - dy * P, P, P);
+      });
+    }
+    function drawSqFrame(frame, x, y, flip) {
+      const ox = x - (SQW * SQP) / 2;
+      const oy = y - SQH * SQP + 6;
+      for (const c in frame) {
+        ctx.fillStyle = c;
+        const pts = frame[c];
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i];
+          const px = flip ? (SQW - 1 - p[0]) : p[0];
+          ctx.fillRect(ox + px * SQP, oy + p[1] * SQP, SQP, SQP);
+        }
+      }
+    }
+    function drawEnt(e) {
+      const sc = toScreen(e.x, e.y);
+      if (e.t) {
+        ctx.fillStyle = 'rgba(0,0,0,0.18)';
+        ctx.beginPath(); ctx.ellipse(sc.x, sc.y + 8, 12, 4, 0, 0, Math.PI * 2); ctx.fill();
+        if (sqMove) {
+          const fi = (animT / 6 | 0) % sqMove.length;
+          const flip = e.vx < -0.05;
+          drawSqFrame(sqMove[fi], sc.x, sc.y, flip);
+        } else {
+          ctx.save(); ctx.translate(sc.x, sc.y);
+          ctx.fillStyle = '#4a8';
+          ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = 'rgba(20,60,30,0.5)'; ctx.lineWidth = 2; ctx.stroke();
+          ctx.restore();
+        }
+      } else {
+        ctx.fillStyle = 'rgba(0,0,0,0.22)';
+        ctx.beginPath(); ctx.ellipse(sc.x, sc.y + 12, 18, 6, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.save(); ctx.translate(sc.x, sc.y);
+        ctx.fillStyle = '#e8c547';
+        ctx.beginPath(); ctx.arc(0, 0, 16, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = 'rgba(50,40,10,0.5)'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.restore();
+      }
+    }
+    const ents = [{x: pos.x, y: pos.y, t: 0}];
+    squirrels.forEach(sq => ents.push({x: sq.x, y: sq.y, t: 1, vx: sq.vx, vy: sq.vy}));
+    ents.sort((a, b) => a.y - b.y);
+    let ei = 0;
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const ch = getChunk(cx, cy), wx = cx * CHUNK, wy = cy * CHUNK;
+        if (ch.peb) {
+          const s = toScreen(wx + ch.peb[0], wy + ch.peb[1]);
+          ctx.fillStyle = 'rgb(50,50,45)';
+          pOt.forEach(([dx, dy]) => ctx.fillRect(s.x + dx * P, s.y - dy * P, P, P));
+          ch.peb[2].forEach((v, i) => {
+            if (i < pFl.length) {
+              ctx.fillStyle = 'rgb(' + (120 + v) + ',' + (118 + v) + ',' + (112 + v) + ')';
+              ctx.fillRect(s.x + pFl[i][0] * P, s.y - pFl[i][1] * P, P, P);
+            }
+          });
+        }
+        if (ch.grass) drawDeco(wx + ch.grass[0], wy + ch.grass[1], gFill, gOut, null);
+        if (ch.bush) drawDeco(wx + ch.bush[0], wy + ch.bush[1], bFill, bOut, ch.bush[2]);
+        if (ch.tree) drawTree(wx + ch.tree[0], wy + ch.tree[1], ch.tree[2], ch.tree[3]);
+      }
+      while (ei < ents.length && ents[ei].y < (cy + 1) * CHUNK) drawEnt(ents[ei++]);
+    }
+    while (ei < ents.length) drawEnt(ents[ei++]);
+    drawPx([Math.floor(timer / 10), timer % 10], W - 50, 15, 5);
+    const sn = score < 10 ? [score] : [...String(score)].map(Number);
+    const sc = [5,10,0,11,12,15,-1,...sn];
+    drawPx(sc, W - 15 - sc.length * 12, 48, 3);
+    if (hiScore > 0) {
+      const hn = hiScore < 10 ? [hiScore] : [...String(hiScore)].map(Number);
+      const hc = [13,14,15,-1,...hn];
+      drawPx(hc, W - 15 - hc.length * 12, 68, 3);
+    }
+  }
+
+  const endOv = document.getElementById('endOverlay');
+  const startOv = document.getElementById('startOverlay');
+  const joystickWrap = document.getElementById('joystickWrap');
+  function startGame() {
+    state = 1;
+    startOv.classList.add('hidden');
+    joystickWrap.classList.remove('hidden');
+    startMus();
+    tId = setInterval(() => {
+      if (state === 3) return;
+      if (--timer <= 0) {
+        timer = 0; state = 2; clearInterval(tId); stopMus(); endSfx();
+        if (score > hiScore) hiScore = score;
+        document.getElementById('endScore').textContent = 'SCORE: ' + score;
+        draw(); canvas.classList.add('blur'); endOv.style.display = 'flex';
+      }
+    }, 1000);
+  }
+  function resetGame() {
+    stopMus();
+    state = 0; timer = 30; score = 0;
+    pos.x = pos.y = vel.x = vel.y = cam.x = cam.y = joy.x = joy.y = 0;
+    squirrels = [];
+    for (let i = 0; i < 8; i++) squirrels.push(spawnSquirrel());
+    for (const k in chunks) delete chunks[k];
+    canvas.classList.remove('blur'); endOv.style.display = 'none';
+    startOv.classList.remove('hidden');
+    joystickWrap.classList.add('hidden');
+    reset(); draw();
+  }
+  document.getElementById('playAgain').addEventListener('click', resetGame);
+
+  const baseR = 60, knobMax = 33;
+
+  function isTapOnSquirrel(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const canX = (clientX - rect.left) * (W / rect.width);
+    const canY = (clientY - rect.top) * (H / rect.height);
+    const sqX = W * SQUIRREL_CX, sqY = H * SQUIRREL_CY;
+    const size = Math.min(W, H) * 1.45;
+    const hitR = size / 2;
+    const dx = canX - sqX, dy = canY - sqY;
+    return dx * dx + dy * dy <= hitR * hitR;
+  }
+
+  function update(cx, cy) {
+    const r = jBase.getBoundingClientRect();
+    const ox = r.left + r.width / 2, oy = r.top + r.height / 2;
+    let dx = cx - ox, dy = cy - oy;
+    let d = Math.sqrt(dx * dx + dy * dy);
+    if (d > baseR && d > 0) {
+      dx = (dx / d) * baseR;
+      dy = (dy / d) * baseR;
+      d = baseR;
+    }
+    const t = d > 0 ? d / baseR : 0;
+    const nx = d > 0 ? dx / baseR : 0;
+    const ny = d > 0 ? dy / baseR : 0;
+    jKnob.style.transform = 'translate(' + nx * knobMax + 'px,' + ny * knobMax + 'px)';
+    joy.x = nx;
+    joy.y = ny;
+  }
+  function reset() {
+    jKnob.style.transform = 'translate(0,0)';
+    joy.x = 0;
+    joy.y = 0;
+  }
+
+  startOv.addEventListener('click', function(e) { e.preventDefault(); if (state === 0) startGame(); }, true);
+  startOv.addEventListener('touchstart', function(e) { if (state === 0) { e.preventDefault(); startGame(); } }, { passive: false });
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (state === 2) return;
+    if (state === 3) { fightTaps++; fightShake = 14; return; }
+    if (!state) startGame();
+    update(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: false });
+  canvas.addEventListener('touchmove', e => { e.preventDefault(); if (state !== 3) update(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+  canvas.addEventListener('touchend', () => { if (state !== 3) reset(); });
+  canvas.addEventListener('touchcancel', () => { if (state !== 3) reset(); });
+  canvas.addEventListener('mousedown', e => {
+    if (state === 2) return;
+    if (state === 3) { fightTaps++; fightShake = 14; return; }
+    if (!state) startGame();
+    update(e.clientX, e.clientY);
+    const mv = ev => { if (state !== 3) update(ev.clientX, ev.clientY); };
+    const up = () => { reset(); removeEventListener('mousemove', mv); removeEventListener('mouseup', up); };
+    addEventListener('mousemove', mv); addEventListener('mouseup', up);
+  });
+
+  setInterval(tick, 1000 / 60);
+  draw();
+})();
+  </script>
+</body>
+</html>
