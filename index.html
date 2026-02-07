@@ -11,8 +11,8 @@
     #gameBox { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; background: #5a8c4a; }
     #gameCanvas { display: block; width: 100%; height: 100%; background: #5a8c4a; }
     #joystickWrap { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 30; }
-    #joystickBase { width: 100px; height: 100px; border-radius: 50%; background: radial-gradient(circle at 30% 30%, #555, #2a2a2a); border: 3px solid rgba(100,100,100,.6); box-shadow: inset 0 0 20px rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; touch-action: none; }
-    #joystickKnob { width: 44px; height: 44px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #e8c547, #d4a84b, #b8860b); box-shadow: 0 4px 12px rgba(0,0,0,.4); position: absolute; transition: transform .05s; }
+    #joystickBase { width: 100px; height: 100px; border-radius: 50%; background: radial-gradient(circle, rgba(200,220,255,0.02) 0%, rgba(200,220,255,0.04) 40%, rgba(190,215,255,0.15) 70%, rgba(210,230,255,0.3) 88%, rgba(220,235,255,0.38) 100%); border: 2px solid rgba(200,220,255,0.3); display: flex; align-items: center; justify-content: center; touch-action: none; }
+    #joystickKnob { width: 44px; height: 44px; border-radius: 50%; background: radial-gradient(circle, rgba(200,220,255,0.03) 0%, rgba(200,220,255,0.06) 35%, rgba(190,215,255,0.18) 65%, rgba(210,230,255,0.33) 85%, rgba(220,235,255,0.42) 100%); border: 2px solid rgba(200,220,255,0.35); position: absolute; transition: transform .05s; }
   </style>
 </head>
 <body>
@@ -46,11 +46,25 @@
   const joystickKnob = document.getElementById('joystickKnob');
 
   let scottyPos = { x: 0, y: 0 };
+  let scottyVel = { x: 0, y: 0 };
   let scottyAngle = 0;
   let cameraOffset = { x: 0, y: 0 };
   let joystick = { x: 0, y: 0 };
+  const MAX_SPEED = 12;
+  const ACCEL_FWD = 0.7;
+  const ACCEL_LAT = 0.25;
+  const FRICTION = 0.96;
   const SCALE = 2;
-  const TILT = 0.55;
+  const TILT = 0.75;
+  const CHUNK = 80;
+  const chunks = {};
+  const GREENS = ['#4a7c3a', '#508242', '#5a8c4a', '#5a8848'];
+
+  function getChunk(cx, cy) {
+    const k = cx + ',' + cy;
+    if (!(k in chunks)) chunks[k] = GREENS[(Math.random() * 4) | 0];
+    return chunks[k];
+  }
 
   function toScreen(wx, wy) {
     return {
@@ -60,13 +74,28 @@
   }
 
   function tick() {
-    const speed = 4;
-    scottyPos.x += joystick.x * speed;
-    scottyPos.y += joystick.y * speed;
-    cameraOffset.x = scottyPos.x;
-    cameraOffset.y = scottyPos.y;
-    const joyMag = Math.sqrt(joystick.x * joystick.x + joystick.y * joystick.y);
-    if (joyMag > 0.08) scottyAngle = Math.atan2(joystick.x, -joystick.y);
+    // Decompose joystick into forward (along velocity) and lateral (turning) components
+    const spd = Math.sqrt(scottyVel.x * scottyVel.x + scottyVel.y * scottyVel.y);
+    let ax = joystick.x, ay = joystick.y;
+    if (spd > 0.3) {
+      const nx = scottyVel.x / spd, ny = scottyVel.y / spd;
+      const fwd = ax * nx + ay * ny; // forward component (dot product)
+      const lx = ax - fwd * nx, ly = ay - fwd * ny; // lateral component
+      ax = fwd * nx * ACCEL_FWD + lx * ACCEL_LAT;
+      ay = fwd * ny * ACCEL_FWD + ly * ACCEL_LAT;
+    } else {
+      ax *= ACCEL_FWD; ay *= ACCEL_FWD;
+    }
+    scottyVel.x = scottyVel.x * FRICTION + ax;
+    scottyVel.y = scottyVel.y * FRICTION + ay;
+    const spd2 = Math.sqrt(scottyVel.x * scottyVel.x + scottyVel.y * scottyVel.y);
+    if (spd2 > MAX_SPEED) { scottyVel.x = scottyVel.x / spd2 * MAX_SPEED; scottyVel.y = scottyVel.y / spd2 * MAX_SPEED; }
+    scottyPos.x += scottyVel.x;
+    scottyPos.y += scottyVel.y;
+    // Camera lerps toward player (lag behind)
+    cameraOffset.x += (scottyPos.x - cameraOffset.x) * 0.1;
+    cameraOffset.y += (scottyPos.y - cameraOffset.y) * 0.1;
+    if (spd2 > 0.1) scottyAngle = Math.atan2(scottyVel.x, -scottyVel.y);
     draw();
   }
 
@@ -91,66 +120,92 @@
   }
 
   function draw() {
-    const grass = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
-    grass.addColorStop(0, '#5a8c4a');
-    grass.addColorStop(1, '#4a7c3a');
-    ctx.fillStyle = grass;
-    ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+    // Visible chunk range (with 1-chunk margin)
+    const cx0 = Math.floor((cameraOffset.x - GAME_WIDTH / 2) / CHUNK) - 1;
+    const cx1 = Math.ceil((cameraOffset.x + GAME_WIDTH / 2) / CHUNK) + 1;
+    const cy0 = Math.floor((cameraOffset.y - GAME_HEIGHT / (2 * TILT)) / CHUNK) - 1;
+    const cy1 = Math.ceil((cameraOffset.y + GAME_HEIGHT / (2 * TILT)) / CHUNK) + 1;
+    const chunkH = CHUNK * TILT;
 
-    const GRID = 80;
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-    ctx.lineWidth = 1;
-    const worldXLeft = cameraOffset.x - GAME_WIDTH / 2;
-    const firstGridX = Math.ceil(worldXLeft / GRID) * GRID;
-    for (let wx = firstGridX; wx < cameraOffset.x + GAME_WIDTH / 2 + GRID; wx += GRID) {
-      const sx = (wx - cameraOffset.x) + GAME_WIDTH / 2;
-      ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, GAME_HEIGHT); ctx.stroke();
-    }
-    const worldYTop = cameraOffset.y - GAME_HEIGHT / (2 * TILT);
-    const firstGridY = Math.ceil(worldYTop / GRID) * GRID;
-    for (let wy = firstGridY; wy < cameraOffset.y + GAME_HEIGHT / (2 * TILT) + GRID; wy += GRID) {
-      const sy = (wy - cameraOffset.y) * TILT + GAME_HEIGHT / 2;
-      ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(GAME_WIDTH, sy); ctx.stroke();
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const s = toScreen(cx * CHUNK, cy * CHUNK);
+        ctx.fillStyle = getChunk(cx, cy);
+        ctx.fillRect(s.x, s.y, CHUNK, chunkH);
+      }
     }
 
-    const haze = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
-    haze.addColorStop(0, 'rgba(40,60,30,0.25)');
-    haze.addColorStop(0.45, 'rgba(40,60,30,0)');
-    ctx.fillStyle = haze;
-    ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
-
-    const sx = GAME_WIDTH / 2, sy = GAME_HEIGHT / 2;
-    drawShadow(sx, sy, 18);
-    drawScotty(sx, sy);
+    const sc = toScreen(scottyPos.x, scottyPos.y);
+    drawShadow(sc.x, sc.y, 18);
+    drawScotty(sc.x, sc.y);
   }
 
-  // Joystick
+  // Joystick — click/tap anywhere to snap joystick, drag to steer
   const maxDist = 50 - 22;
-  function setJoystick(clientX, clientY) {
+  const jWrap = document.getElementById('joystickWrap');
+  let jCenter = { x: 0, y: 0 }; // track joystick base center in screen coords
+
+  function snapJoystick(clientX, clientY) {
+    // Get current joystick center, place base so knob lands at click point
     const r = joystickBase.getBoundingClientRect();
-    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-    let dx = clientX - cx, dy = clientY - cy;
+    const ox = r.left + r.width / 2, oy = r.top + r.height / 2;
+    let dx = clientX - ox, dy = clientY - oy;
     const d = Math.sqrt(dx * dx + dy * dy);
-    const clamp = Math.min(d, maxDist);
+    if (d > 1) {
+      jCenter.x = clientX - (dx / d) * maxDist;
+      jCenter.y = clientY - (dy / d) * maxDist;
+    } else {
+      jCenter.x = clientX;
+      jCenter.y = clientY;
+    }
+    jWrap.style.left = jCenter.x + 'px';
+    jWrap.style.top = jCenter.y + 'px';
+    jWrap.style.transform = 'translate(-50%,-50%)';
+    jWrap.style.bottom = 'auto';
+  }
+  function updateJoystick(clientX, clientY) {
+    let dx = clientX - jCenter.x, dy = clientY - jCenter.y;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d > maxDist) {
+      // Move joystick base to follow, keeping knob at max distance
+      jCenter.x = clientX - (dx / d) * maxDist;
+      jCenter.y = clientY - (dy / d) * maxDist;
+      jWrap.style.left = jCenter.x + 'px';
+      jWrap.style.top = jCenter.y + 'px';
+      dx = clientX - jCenter.x;
+      dy = clientY - jCenter.y;
+    }
+    const clamp = Math.min(Math.sqrt(dx * dx + dy * dy), maxDist);
     const angle = Math.atan2(dy, dx);
     joystickKnob.style.transform = 'translate(' + Math.cos(angle) * clamp + 'px,' + Math.sin(angle) * clamp + 'px)';
     joystick.x = clamp > 0 ? (Math.cos(angle) * clamp) / maxDist : 0;
     joystick.y = clamp > 0 ? (Math.sin(angle) * clamp) / maxDist : 0;
   }
-  function clearJoystick() {
+  function resetJoystick() {
     joystickKnob.style.transform = 'translate(0,0)';
     joystick.x = 0;
     joystick.y = 0;
+    // Reset joystick to default bottom-center position
+    jWrap.style.left = '50%';
+    jWrap.style.top = '';
+    jWrap.style.bottom = '24px';
+    jWrap.style.transform = 'translateX(-50%)';
   }
 
-  joystickBase.addEventListener('touchstart', e => { e.preventDefault(); setJoystick(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
-  joystickBase.addEventListener('touchmove', e => { e.preventDefault(); setJoystick(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
-  joystickBase.addEventListener('touchend', clearJoystick);
-  joystickBase.addEventListener('touchcancel', clearJoystick);
-  joystickBase.addEventListener('mousedown', e => {
-    setJoystick(e.clientX, e.clientY);
-    const move = e => setJoystick(e.clientX, e.clientY);
-    const up = () => { clearJoystick(); window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const t = e.touches[0];
+    snapJoystick(t.clientX, t.clientY);
+    updateJoystick(t.clientX, t.clientY);
+  }, { passive: false });
+  canvas.addEventListener('touchmove', e => { e.preventDefault(); updateJoystick(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+  canvas.addEventListener('touchend', resetJoystick);
+  canvas.addEventListener('touchcancel', resetJoystick);
+  canvas.addEventListener('mousedown', e => {
+    snapJoystick(e.clientX, e.clientY);
+    updateJoystick(e.clientX, e.clientY);
+    const move = e => updateJoystick(e.clientX, e.clientY);
+    const up = () => { resetJoystick(); window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
   });
